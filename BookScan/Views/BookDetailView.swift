@@ -256,7 +256,12 @@ struct BookDetailView: View {
                 Button {
                     scanTarget = ImportTarget(bookID: book.id)
                 } label: {
-                    Label("スキャンして追加", systemImage: "doc.viewfinder")
+                    Label("連続スキャンで追加", systemImage: "book.pages")
+                }
+                Button {
+                    scanTarget = ImportTarget(bookID: book.id, classic: true)
+                } label: {
+                    Label("メモ方式でスキャンして追加", systemImage: "doc.viewfinder")
                 }
                 Button {
                     photoTarget = ImportTarget(bookID: book.id)
@@ -351,7 +356,7 @@ struct BookDetailView: View {
             Button {
                 scanTarget = ImportTarget(bookID: book.id)
             } label: {
-                Label("スキャン追加", systemImage: "doc.viewfinder")
+                Label("スキャン追加", systemImage: "book.pages")
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
             }
@@ -456,9 +461,19 @@ struct PageCell: View {
                             .offset(x: 6, y: -3)
                     }
                 }
-            Text("\(number)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                if page.hasIssues {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+                Text("\(number)")
+                    .foregroundStyle(.secondary)
+                if let printed = page.printedNumber, printed != number {
+                    Text("p.\(printed)")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .font(.caption.monospacedDigit())
         }
         .contentShape(Rectangle())
     }

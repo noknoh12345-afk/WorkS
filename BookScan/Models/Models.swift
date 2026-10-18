@@ -69,6 +69,18 @@ struct Page: Codable, Identifiable, Hashable {
     var ocrLines: [OCRLine]?
     var ocrRotation: Int?
     var createdAt: Date
+    /// 連続スキャンで撮った元写真（本のフォルダからの相対パス）
+    var rawFileName: String?
+    /// 元写真の中のページの四隅（左上, 右上, 右下, 左下 の x,y。正規化・左上原点）
+    var quad: [Double]?
+    /// 見開きを分けたページなら "left" / "right"
+    var rawHalf: String?
+    /// 撮影時に見つかった問題（"blur" / "hand" / "noCrop"）
+    var flags: [String]?
+    /// 紙に印刷されていたページ番号
+    var printedNumber: Int?
+    /// 画像を作り直すたびに増やす（キャッシュの区別用）
+    var contentVersion: Int
 
     init(id: UUID = UUID(), fileName: String, filter: PageFilter, rotation: Int = 0) {
         self.id = id
@@ -78,10 +90,17 @@ struct Page: Codable, Identifiable, Hashable {
         self.ocrLines = nil
         self.ocrRotation = nil
         self.createdAt = Date()
+        self.rawFileName = nil
+        self.quad = nil
+        self.rawHalf = nil
+        self.flags = nil
+        self.printedNumber = nil
+        self.contentVersion = 0
     }
 
     enum CodingKeys: String, CodingKey {
         case id, fileName, filter, rotation, ocrLines, ocrRotation, createdAt
+        case rawFileName, quad, rawHalf, flags, printedNumber, contentVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -93,12 +112,33 @@ struct Page: Codable, Identifiable, Hashable {
         ocrLines = try? c.decode([OCRLine].self, forKey: .ocrLines)
         ocrRotation = try? c.decode(Int.self, forKey: .ocrRotation)
         createdAt = (try? c.decode(Date.self, forKey: .createdAt)) ?? Date()
+        rawFileName = try? c.decode(String.self, forKey: .rawFileName)
+        quad = try? c.decode([Double].self, forKey: .quad)
+        rawHalf = try? c.decode(String.self, forKey: .rawHalf)
+        flags = try? c.decode([String].self, forKey: .flags)
+        printedNumber = try? c.decode(Int.self, forKey: .printedNumber)
+        contentVersion = (try? c.decode(Int.self, forKey: .contentVersion)) ?? 0
     }
 
     var normalizedRotation: Int { ((rotation % 4) + 4) % 4 }
 
-    /// フィルター・回転ごとのキャッシュキー
-    var renderKey: String { "\(id.uuidString)-\(filter.rawValue)-r\(normalizedRotation)" }
+    /// フィルター・回転・画像の版ごとのキャッシュキー
+    var renderKey: String { "\(id.uuidString)-v\(contentVersion)-\(filter.rawValue)-r\(normalizedRotation)" }
+
+    var hasIssues: Bool { !(flags ?? []).isEmpty }
+
+    var issueLabels: [String] {
+        (flags ?? []).compactMap {
+            switch $0 {
+            case "blur": return "ブレ"
+            case "hand": return "手写り"
+            case "noCrop": return "範囲未検出"
+            default: return nil
+            }
+        }
+    }
+
+    var canAdjustCrop: Bool { rawFileName != nil }
 
     var needsOCR: Bool { ocrLines == nil || ocrRotation != normalizedRotation }
 
@@ -184,6 +224,8 @@ struct ImportTarget: Identifiable, Equatable {
     var bookID: UUID?
     var insertAt: Int?
     var replacing: UUID?
+    /// メモアプリ方式（VisionKit）のスキャナーを使う
+    var classic: Bool = false
 }
 
 /// 見開き表示の設定

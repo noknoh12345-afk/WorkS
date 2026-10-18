@@ -12,6 +12,10 @@ struct SettingsView: View {
     @AppStorage(AppSettings.spreadModeKey) private var spreadMode = SpreadMode.auto.rawValue
     @AppStorage(AppSettings.coverAloneKey) private var coverAlone = true
     @AppStorage(AppSettings.liveTextKey) private var liveText = true
+    @AppStorage("scanAutoCapture") private var scanAutoCapture = true
+    @AppStorage("scanSpeed") private var scanSpeed = "normal"
+    @AppStorage("scanKeepRaw") private var scanKeepRaw = true
+    @AppStorage("scanHighestResolution") private var scanHighestResolution = false
 
     @State private var dataSize: String = "計算中…"
     @State private var cacheSize: String = "計算中…"
@@ -35,6 +39,21 @@ struct SettingsView: View {
                     Text("スキャン")
                 } footer: {
                     Text("元の画像は常にそのまま保存されるので、補正はあとからいつでも変更できます。")
+                }
+
+                Section {
+                    Toggle("めくりを検知して自動撮影", isOn: $scanAutoCapture)
+                    Picker("撮影のタイミング", selection: $scanSpeed) {
+                        Text("慎重").tag("careful")
+                        Text("標準").tag("normal")
+                        Text("速い").tag("fast")
+                    }
+                    Toggle("元の写真も保存（あとで範囲を調整できる）", isOn: $scanKeepRaw)
+                    Toggle("カメラの最高解像度で撮影", isOn: $scanHighestResolution)
+                } header: {
+                    Text("連続スキャン")
+                } footer: {
+                    Text("最高解像度は対応機種で約4800万画素になり、容量が大きくなります。ふだんは約1200万画素で十分きれいです。")
                 }
 
                 Section {

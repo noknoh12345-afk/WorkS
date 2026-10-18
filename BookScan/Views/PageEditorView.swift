@@ -11,6 +11,7 @@ struct PageEditorView: View {
     @State private var preview: UIImage?
     @State private var tab = 0
     @State private var copied = false
+    @State private var showCrop = false
 
     var body: some View {
         NavigationStack {
@@ -33,7 +34,7 @@ struct PageEditorView: View {
                         }
                     }
                     .padding(.top, 8)
-                    .navigationTitle("\(index + 1) ページ")
+                    .navigationTitle(page.printedNumber.map { "\(index + 1) ページ（p.\($0)）" } ?? "\(index + 1) ページ")
                 } else {
                     ContentUnavailableView("ページが見つかりません", systemImage: "doc")
                 }
@@ -64,6 +65,25 @@ struct PageEditorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal)
+        .overlay(alignment: .top) {
+            if page.hasIssues {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text("撮影時の注意：\(page.issueLabels.joined(separator: "・"))")
+                        .font(.footnote.weight(.semibold))
+                    Button("問題なし") { store.clearFlags(bookID: bookID, pageID: pageID) }
+                        .font(.footnote.weight(.bold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(.regularMaterial, in: Capsule())
+            }
+        }
+        .sheet(isPresented: $showCrop) {
+            CropEditorView(bookID: bookID, pageID: pageID).environment(store)
+        }
         .task(id: page.renderKey) {
             if let cached = PageImages.cachedDisplay(page) {
                 preview = cached
@@ -114,6 +134,16 @@ struct PageEditorView: View {
                 Image(systemName: "rotate.right").font(.title3).frame(width: 44, height: 36)
             }
             .buttonStyle(.bordered)
+            if page.canAdjustCrop {
+                Button {
+                    showCrop = true
+                } label: {
+                    Label("範囲", systemImage: "crop")
+                        .font(.subheadline)
+                        .frame(height: 36)
+                }
+                .buttonStyle(.bordered)
+            }
             Spacer()
             Menu {
                 Button("「\(page.filter.label)」を全ページに適用") {

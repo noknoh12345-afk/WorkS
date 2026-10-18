@@ -26,6 +26,8 @@ final class LibraryStore {
 
     @ObservationIgnored private var saveWork: Task<Void, Never>?
     @ObservationIgnored private var ocrTasks: [UUID: Task<Void, Never>] = [:]
+    /// 連続スキャン中は端末の処理を撮影に回すため、その本の文字認識を止める
+    @ObservationIgnored private var ocrSuspended: Set<UUID> = []
 
     init() {
         Paths.ensure(Paths.booksDir)
@@ -249,15 +251,29 @@ final class LibraryStore {
         guard sourceID != targetID, let src = book(sourceID), book(targetID) != nil else { return }
         Paths.ensure(Paths.bookDir(targetID))
         var moved: [Page] = []
+        var movedRaw = Set<String>()
         for p in src.pages {
             let from = Paths.pageFile(bookID: sourceID, fileName: p.fileName)
             let to = Paths.pageFile(bookID: targetID, fileName: p.fileName)
+            var page = p
             do {
                 try FileManager.default.moveItem(at: from, to: to)
-                moved.append(p)
             } catch {
-                if (try? FileManager.default.copyItem(at: from, to: to)) != nil { moved.append(p) }
+                guard (try? FileManager.default.copyItem(at: from, to: to)) != nil else { continue }
             }
+            if let raw = p.rawFileName, !movedRaw.contains(raw) {
+                let rFrom = Paths.pageFile(bookID: sourceID, fileName: raw)
+                let rTo = Paths.pageFile(bookID: targetID, fileName: raw)
+                Paths.ensure(rTo.deletingLastPathComponent())
+                if (try? FileManager.default.moveItem(at: rFrom, to: rTo)) != nil {
+                    movedRaw.insert(raw)
+                } else if !FileManager.default.fileExists(atPath: rTo.path) {
+                    page.rawFileName = nil
+                    page.quad = nil
+                    page.rawHalf = nil
+                }
+            }
+            moved.append(page)
         }
         mutate(targetID) { $0.pages.append(contentsOf: moved) }
         try? FileManager.default.removeItem(at: Paths.bookDir(sourceID))
@@ -269,11 +285,20 @@ final class LibraryStore {
 
     // MARK: - ページの編集
 
+    /// ページのファイルを消す。元写真はほかのページ（見開きの片側など）が使っていなければ消す
+    private func removeFiles(of page: Page, bookID: UUID, remaining: [Page]) {
+        try? FileManager.default.removeItem(at: Paths.pageFile(bookID: bookID, fileName: page.fileName))
+        if let raw = page.rawFileName, !remaining.contains(where: { $0.rawFileName == raw }) {
+            try? FileManager.default.removeItem(at: Paths.pageFile(bookID: bookID, fileName: raw))
+        }
+        Paths.purgeCaches(pageID: page.id)
+    }
+
     func deletePages(bookID: UUID, ids: Set<UUID>) {
         guard let b = book(bookID) else { return }
+        let remaining = b.pages.filter { !ids.contains($0.id) }
         for p in b.pages where ids.contains(p.id) {
-            try? FileManager.default.removeItem(at: Paths.pageFile(bookID: bookID, fileName: p.fileName))
-            Paths.purgeCaches(pageID: p.id)
+            removeFiles(of: p, bookID: bookID, remaining: remaining)
         }
         mutate(bookID) { book in
             book.pages.removeAll { ids.contains($0.id) }
@@ -313,12 +338,20 @@ final class LibraryStore {
         let filter = page.filter
         let quality = AppSettings.jpegQuality
         let rtl = b.binding == .right
+        // 回転していない1ページなら、分けたあとも元写真から範囲を調整できるようにする
+        let keepRaw = rotation == 0 && page.rawHalf == nil ? page.rawFileName : nil
+        let quad = page.quad
         let made = await Task.detached(priority: .userInitiated) { () -> [Page]? in
             guard let cg = ImageProcessor.render(url: src, filter: .original, rotation: rotation, maxPixel: nil),
                   let halves = SpreadSplitter.split(cg) else { return nil }
             var out: [Page] = []
-            for half in [halves.0, halves.1] {
-                let p = Page(fileName: UUID().uuidString + ".jpg", filter: filter)
+            for (half, side) in [(halves.0, "left"), (halves.1, "right")] {
+                var p = Page(fileName: UUID().uuidString + ".jpg", filter: filter)
+                if let keepRaw {
+                    p.rawFileName = keepRaw
+                    p.quad = quad
+                    p.rawHalf = side
+                }
                 guard ImageIOHelper.writeJPEG(half, to: Paths.pageFile(bookID: bookID, fileName: p.fileName), quality: quality) else { return nil }
                 out.append(p)
             }
@@ -334,8 +367,7 @@ final class LibraryStore {
             replaced = true
         }
         if replaced {
-            try? FileManager.default.removeItem(at: src)
-            Paths.purgeCaches(pageID: pageID)
+            removeFiles(of: page, bookID: bookID, remaining: book(bookID)?.pages ?? [])
             scheduleOCR(for: bookID)
         } else {
             for p in made { try? FileManager.default.removeItem(at: Paths.pageFile(bookID: bookID, fileName: p.fileName)) }
@@ -364,6 +396,85 @@ final class LibraryStore {
         }
     }
 
+    // MARK: - 連続スキャン
+
+    func createEmptyBook() -> UUID {
+        let b = Book(title: newBookTitle(), binding: AppSettings.defaultBinding)
+        books.insert(b, at: 0)
+        scheduleSave()
+        return b.id
+    }
+
+    func suspendOCR(_ bookID: UUID) {
+        ocrSuspended.insert(bookID)
+        ocrTasks[bookID]?.cancel()
+    }
+
+    func resumeOCR(_ bookID: UUID) {
+        ocrSuspended.remove(bookID)
+        scheduleOCR(for: bookID)
+    }
+
+    /// 撮ったページを本の指定位置に入れる
+    func insertScannedPage(_ page: Page, into bookID: UUID, at index: Int) {
+        mutate(bookID) { b in
+            b.pages.insert(page, at: min(max(index, 0), b.pages.count))
+        }
+    }
+
+    /// 撮り直したページで置き換える（位置・しおり・表紙を引き継ぐ）
+    func replaceScannedPage(bookID: UUID, oldID: UUID, with page: Page) {
+        guard let b = book(bookID), let old = b.pages.first(where: { $0.id == oldID }) else {
+            insertScannedPage(page, into: bookID, at: Int.max)
+            return
+        }
+        var replacement = page
+        replacement.filter = old.filter == page.filter ? page.filter : old.filter
+        mutate(bookID) { book in
+            guard let i = book.pages.firstIndex(where: { $0.id == oldID }) else { return }
+            book.pages[i] = replacement
+            if book.coverPageID == oldID { book.coverPageID = replacement.id }
+            if let bi = book.bookmarks.firstIndex(of: oldID) { book.bookmarks[bi] = replacement.id }
+        }
+        removeFiles(of: old, bookID: bookID, remaining: book(bookID)?.pages ?? [])
+    }
+
+    /// 本に入れなかった撮影結果のファイルを消す
+    func discardFiles(of page: Page, bookID: UUID) {
+        removeFiles(of: page, bookID: bookID, remaining: book(bookID)?.pages ?? [])
+    }
+
+    func setPrintedNumber(bookID: UUID, pageID: UUID, _ number: Int?) {
+        mutate(bookID, touch: false) { b in
+            guard let i = b.pages.firstIndex(where: { $0.id == pageID }) else { return }
+            b.pages[i].printedNumber = number
+        }
+    }
+
+    func clearFlags(bookID: UUID, pageID: UUID) {
+        mutate(bookID, touch: false) { b in
+            guard let i = b.pages.firstIndex(where: { $0.id == pageID }) else { return }
+            b.pages[i].flags = nil
+        }
+    }
+
+    /// 範囲を調整して作り直した画像に差し替える
+    func updatePageImage(bookID: UUID, pageID: UUID, newFileName: String, quad: [Double]) {
+        guard let b = book(bookID), let old = b.pages.first(where: { $0.id == pageID }) else { return }
+        mutate(bookID) { book in
+            guard let i = book.pages.firstIndex(where: { $0.id == pageID }) else { return }
+            book.pages[i].fileName = newFileName
+            book.pages[i].quad = quad
+            book.pages[i].contentVersion += 1
+            book.pages[i].ocrLines = nil
+            book.pages[i].ocrRotation = nil
+            book.pages[i].flags = (book.pages[i].flags ?? []).filter { $0 != "noCrop" }
+        }
+        try? FileManager.default.removeItem(at: Paths.pageFile(bookID: bookID, fileName: old.fileName))
+        Paths.purgeCaches(pageID: pageID)
+        scheduleOCR(for: bookID, force: true)
+    }
+
     // MARK: - 文字認識
 
     func redoOCR(bookID: UUID, pageID: UUID? = nil) {
@@ -378,6 +489,7 @@ final class LibraryStore {
 
     func scheduleOCR(for bookID: UUID, force: Bool = false) {
         guard force || AppSettings.autoOCR else { return }
+        guard !ocrSuspended.contains(bookID) else { return }
         guard ocrTasks[bookID] == nil else { return }
         ocrRunning.insert(bookID)
         ocrTasks[bookID] = Task { [weak self] in
@@ -389,6 +501,7 @@ final class LibraryStore {
 
     private func runOCRLoop(_ bookID: UUID) async {
         while !Task.isCancelled,
+              !ocrSuspended.contains(bookID),
               let b = book(bookID),
               let page = b.pages.first(where: { $0.needsOCR }) {
             let url = Paths.pageFile(bookID: bookID, fileName: page.fileName)

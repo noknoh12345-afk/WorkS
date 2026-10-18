@@ -268,7 +268,12 @@ struct LibraryView: View {
                 Button {
                     scanTarget = ImportTarget()
                 } label: {
-                    Label("カメラでスキャン", systemImage: "doc.viewfinder")
+                    Label("連続スキャン（めくり自動検知）", systemImage: "book.pages")
+                }
+                Button {
+                    scanTarget = ImportTarget(classic: true)
+                } label: {
+                    Label("メモ方式でスキャン", systemImage: "doc.viewfinder")
                 }
                 Button {
                     photoTarget = ImportTarget()
@@ -291,7 +296,7 @@ struct LibraryView: View {
             Button {
                 scanTarget = ImportTarget()
             } label: {
-                Label("新しくスキャン", systemImage: "doc.viewfinder")
+                Label("新しくスキャン", systemImage: "book.pages")
                     .font(.headline)
                     .padding(.horizontal, 22)
                     .padding(.vertical, 14)

@@ -137,26 +137,37 @@ struct PageImporterModifier: ViewModifier {
 
     private var scannerSupported: Bool { VNDocumentCameraViewController.isSupported }
 
+    /// 1枚の撮り直し（差し替え）や明示指定はメモ方式、それ以外は連続スキャン
+    private func useClassic(_ t: ImportTarget) -> Bool { t.classic || t.replacing != nil }
+
     func body(content: Content) -> some View {
         content
             .fullScreenCover(item: Binding(
-                get: { scannerSupported ? scanTarget : nil },
+                get: { scanTarget.flatMap { useClassic($0) && !scannerSupported ? nil : $0 } },
                 set: { scanTarget = $0 }
             )) { target in
-                DocumentScannerView(onFinish: { scan in
-                    scanTarget = nil
-                    Task {
-                        if let id = await store.importScan(scan, target: target) {
-                            onImported(id, target.bookID == nil)
+                if useClassic(target) {
+                    DocumentScannerView(onFinish: { scan in
+                        scanTarget = nil
+                        Task {
+                            if let id = await store.importScan(scan, target: target) {
+                                onImported(id, target.bookID == nil)
+                            }
                         }
+                    }, onCancel: {
+                        scanTarget = nil
+                    })
+                    .ignoresSafeArea()
+                } else {
+                    BookScannerView(target: target) { id, isNew in
+                        scanTarget = nil
+                        if let id { onImported(id, isNew) }
                     }
-                }, onCancel: {
-                    scanTarget = nil
-                })
-                .ignoresSafeArea()
+                    .environment(store)
+                }
             }
             .alert("この端末ではスキャナーを使えません", isPresented: Binding(
-                get: { scanTarget != nil && !scannerSupported },
+                get: { scanTarget.map { useClassic($0) } == true && !scannerSupported },
                 set: { if !$0 { scanTarget = nil } }
             )) {
                 Button("OK", role: .cancel) {}

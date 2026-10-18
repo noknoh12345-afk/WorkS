@@ -4,17 +4,22 @@ options:
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
+packages:
+  ScanCore:
+    path: ScanCore
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.1.0"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "1.2.0"
+    CURRENT_PROJECT_VERSION: "3"
 targets:
   BookScan:
     type: application
     platform: iOS
     sources:
       - path: BookScan
+    dependencies:
+      - package: ScanCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.noknoh.bookscan

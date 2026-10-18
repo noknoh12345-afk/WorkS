@@ -21,6 +21,11 @@ jobs:
           sudo xcode-select -s "$XC"
           xcodebuild -version
 
+      - name: Test scan logic (ScanCore)
+        run: |
+          set -o pipefail
+          swift test --package-path ScanCore 2>&1 | grep -E "error|failed|Executed" | tail -40
+
       - name: Install tools
         run: brew install xcodegen ldid
 
