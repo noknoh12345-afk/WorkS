@@ -89,6 +89,7 @@ final class ScanSession {
     @ObservationIgnored private var skipped: [UUID: (ProcessedPage, UUID?)] = [:]
     @ObservationIgnored private var autoRetakeAttempts: [UUID: Int] = [:]
     @ObservationIgnored private var lastMissedCount = 0
+    @ObservationIgnored private var lastSkipAt: Date?
     @ObservationIgnored private var lastMissingSet = Set<Int>()
     @ObservationIgnored weak var previewView: CameraPreviewUIView?
     @ObservationIgnored private var previewAttached = false
@@ -247,10 +248,27 @@ final class ScanSession {
         if fired { didFireShutter() }
         if missed > lastMissedCount {
             lastMissedCount = missed
-            notify(.warning)
-            show(Toast(message: "撮る前にめくられたページがあります。前のページに戻してください（戻せば自動で正しい位置に入ります）",
-                       style: .warning, action: .showMissingHelp, actionLabel: nil), duration: 6)
+            let at = Date()
+            Task { [weak self] in
+                // 戻ってめくっている最中かどうかを見極めてから知らせる
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                self?.warnMissedIfNeeded(since: at)
+            }
         }
+    }
+
+    /// 撮る前にめくられたページを知らせる（ただし誤報になりやすい場面では黙る）
+    private func warnMissedIfNeeded(since: Date) {
+        guard !isFinishing else { return }
+        // 撮影済みのページを戻ってめくっている（重複スキップが続いている）
+        if let t = lastSkipAt, Date().timeIntervalSince(t) < 10 { return }
+        // 差し込み・撮り直しのためにページを探している
+        if cursorAfterID != nil || cursorAtStart || replaceTargetID != nil { return }
+        // ページ番号が読めている本は「抜け p.○」の表示の方が正確
+        if model.records.filter(\.hasReliableNumber).count >= 2 { return }
+        notify(.warning)
+        show(Toast(message: "撮る前にめくられたページがあるかもしれません。前のページに戻すと、撮影済みのページは自動でスキップされます",
+                   style: .warning, action: .showMissingHelp, actionLabel: nil), duration: 6)
     }
 
     private func didFireShutter() {
@@ -362,6 +380,7 @@ final class ScanSession {
                     retryAutoRetake(for: dup, reason: "まだブレています。スマホを止めてもう一度")
                     continue
                 }
+                lastSkipAt = Date()
                 skipped[page.id] = (item, dup)
                 let label = model.displayNumber(dup).map { "p.\($0.number)" } ?? "撮影済み"
                 show(Toast(message: "\(label) と同じページなので追加しませんでした", style: .info,

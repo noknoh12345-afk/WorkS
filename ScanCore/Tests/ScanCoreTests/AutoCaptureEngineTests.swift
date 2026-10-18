@@ -97,7 +97,7 @@ final class AutoCaptureEngineTests: XCTestCase {
 
     func testDoesNotCaptureWhileHandIsOverPage() {
         var sim = Sim()
-        sim.hold(page: 1, seconds: 3, hand: true)
+        sim.hold(page: 1, seconds: 2.0, hand: true)
         XCTAssertEqual(sim.captures.count, 0)
         XCTAssertEqual(sim.engine.status, .handOverPage)
         sim.hold(page: 1, seconds: 1.5)
@@ -266,6 +266,29 @@ final class AutoCaptureEngineTests: XCTestCase {
         XCTAssertEqual(sim.captures.count, 2)
         sim.hold(page: 1, seconds: 3)
         XCTAssertEqual(sim.captures.count, 2)
+    }
+
+    func testDarkOrFeaturelessFramesAreNeverCaptured() {
+        var sim = Sim()
+        // 伏せて置いた（真っ暗）
+        let dark = GrayImage(width: 32, height: 24, fill: 8)
+        for _ in 0..<60 { sim.frame(Fixtures.noisy(dark, amplitude: 2, rng: &sim.rng), quad: nil) }
+        // 模様のない机（輪郭なし）
+        let desk = GrayImage(width: 32, height: 24, fill: 150)
+        for _ in 0..<60 { sim.frame(Fixtures.noisy(desk, amplitude: 2, rng: &sim.rng), quad: nil) }
+        XCTAssertEqual(sim.captures.count, 0)
+        // 白紙でも紙の輪郭が見えていれば撮る
+        let blank = GrayImage(width: 32, height: 24, fill: 230)
+        for _ in 0..<30 { sim.frame(Fixtures.noisy(blank, amplitude: 2, rng: &sim.rng), quad: Fixtures.quad) }
+        XCTAssertEqual(sim.captures.count, 1)
+    }
+
+    func testStillHandHoldingPageAllowsCaptureAfterAWhile() {
+        var sim = Sim()
+        sim.hold(page: 1, seconds: 2.0, hand: true)
+        XCTAssertEqual(sim.captures.count, 0, "手が乗ってすぐは撮らない")
+        sim.hold(page: 1, seconds: 1.5, hand: true)
+        XCTAssertEqual(sim.captures.count, 1, "押さえているだけの手ならしばらくして撮る")
     }
 }
 

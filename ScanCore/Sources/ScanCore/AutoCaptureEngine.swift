@@ -153,6 +153,12 @@ public struct CaptureTuning: Equatable {
     public var sharpnessDropRatio: Double = 0.6
     /// 撮影待ちのページがこの秒数以上見えていたのにめくられたら「撮り逃し」とみなす
     public var missDetectionVisibleTime: Double = 0.25
+    /// 真っ暗（伏せて置いた等）とみなす明るさ（0〜255）
+    public var minBrightness: Double = 22
+    /// 紙の輪郭が見えず、模様もほとんどない（机・白い壁など）とみなすコントラスト
+    public var minContrastWithoutDocument: Double = 6
+    /// 手が紙の上でじっとしている（押さえている）なら、この秒数後は撮影を許す
+    public var stillHandAllowance: Double = 2.5
 
     public init() {}
 
@@ -212,6 +218,7 @@ public final class AutoCaptureEngine {
     private var lastQuad: Quad?
     private var focusWaitStart: Double?
     private var lastSoftOutlier: Double?
+    private var stillHandSince: Double?
     /// 撮影待ちのページが落ち着いて見えていた時間（めくられたら「撮り逃し」と判断する材料）
     private var visibleUncapturedSince: Double?
 
@@ -238,6 +245,7 @@ public final class AutoCaptureEngine {
         lastQuad = nil
         focusWaitStart = nil
         lastSoftOutlier = nil
+        stillHandSince = nil
         visibleUncapturedSince = nil
         missedPageCount = 0
     }
@@ -314,6 +322,23 @@ public final class AutoCaptureEngine {
         }
         lastQuad = s.quad
 
+        // 真っ暗・模様のない画面は「ページなし」
+        var sum = 0.0, sum2 = 0.0
+        for p in s.thumb { let d = Double(p); sum += d; sum2 += d * d }
+        let n = Double(max(s.thumb.count, 1))
+        let mean = sum / n
+        let contrast = max(sum2 / n - mean * mean, 0).squareRoot()
+        let looksEmpty = mean < tuning.minBrightness || (s.quad == nil && contrast < tuning.minContrastWithoutDocument)
+
+        // 紙を押さえて動かない手は、しばらくしたら邪魔ものとして扱わない
+        var handBlocks = s.handOverPage
+        if s.handOverPage && motion <= stableThreshold {
+            if stillHandSince == nil { stillHandSince = s.time }
+            if let since = stillHandSince, s.time - since >= tuning.stillHandAllowance { handBlocks = false }
+        } else if !s.handOverPage || motion > stableThreshold * 1.8 {
+            stillHandSince = nil
+        }
+
         // めくりの検知（大きな動きが一定時間続く／手が紙の上で動く）
         let bigMotion = motion > turnThreshold
         let handMoving = s.handOverPage && motion > stableThreshold
@@ -341,9 +366,9 @@ public final class AutoCaptureEngine {
         }
 
         // 静止の判定（ごく短い揺れ1回までは許す）
-        let strictStable = motion <= stableThreshold && !s.handOverPage && quadStable
+        let strictStable = motion <= stableThreshold && !handBlocks && quadStable
         var isStable = strictStable
-        if !strictStable, stableSince != nil, !s.handOverPage,
+        if !strictStable, stableSince != nil, !handBlocks,
            motion <= stableThreshold * 1.8, motion < turnThreshold {
             if let last = lastSoftOutlier, s.time - last < 0.5 {
                 isStable = false
@@ -363,7 +388,7 @@ public final class AutoCaptureEngine {
             stableMaxSharpness = 0
         }
         // 撮影待ちのページが見えている
-        if armed && !inFlight && !bigMotion {
+        if armed && !inFlight && !bigMotion && !looksEmpty {
             if visibleUncapturedSince == nil { visibleUncapturedSince = s.time }
         } else if !armed || inFlight {
             visibleUncapturedSince = nil
@@ -376,7 +401,7 @@ public final class AutoCaptureEngine {
             status = .capturing
             return false
         }
-        if s.handOverPage {
+        if handBlocks {
             status = .handOverPage
             return false
         }
@@ -399,6 +424,10 @@ public final class AutoCaptureEngine {
         }
         guard autoEnabled else {
             status = .paused
+            return false
+        }
+        if looksEmpty {
+            status = .findingPage
             return false
         }
         guard isStable else {
