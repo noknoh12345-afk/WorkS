@@ -8,6 +8,7 @@ struct BookDetailView: View {
 
     @State private var scanTarget: ImportTarget?
     @State private var photoTarget: ImportTarget?
+    @State private var fileTarget: ImportTarget?
     @State private var reading: ReadTarget?
     @State private var editingPage: PageRef?
     @State private var infoBook: Book?
@@ -29,7 +30,7 @@ struct BookDetailView: View {
                 ContentUnavailableView("本が見つかりません", systemImage: "book")
             }
         }
-        .pageImporter(scanTarget: $scanTarget, photoTarget: $photoTarget)
+        .pageImporter(scanTarget: $scanTarget, photoTarget: $photoTarget, fileTarget: $fileTarget)
         .fullScreenCover(item: $reading) { target in
             ReaderView(bookID: target.bookID, startIndex: target.index).environment(store)
         }
@@ -174,7 +175,9 @@ struct BookDetailView: View {
                 Button {
                     reading = ReadTarget(bookID: book.id, index: i)
                 } label: {
-                    PageCell(bookID: book.id, page: page, number: i + 1, isCover: book.coverPage?.id == page.id)
+                    PageCell(bookID: book.id, page: page, number: i + 1,
+                             isCover: book.coverPage?.id == page.id,
+                             isBookmarked: book.isBookmarked(page.id))
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
@@ -226,6 +229,17 @@ struct BookDetailView: View {
         } label: {
             Label("表紙に設定", systemImage: "star")
         }
+        Button {
+            store.toggleBookmark(book.id, pageID: page.id)
+        } label: {
+            Label(book.isBookmarked(page.id) ? "しおりを外す" : "しおりを挟む",
+                  systemImage: book.isBookmarked(page.id) ? "bookmark.slash" : "bookmark")
+        }
+        Button {
+            split(book: book, pageID: page.id)
+        } label: {
+            Label("見開きを左右に分割", systemImage: "rectangle.split.2x1")
+        }
         Divider()
         Button(role: .destructive) {
             pageToDelete = page
@@ -248,6 +262,11 @@ struct BookDetailView: View {
                     photoTarget = ImportTarget(bookID: book.id)
                 } label: {
                     Label("写真から追加", systemImage: "photo.on.rectangle")
+                }
+                Button {
+                    fileTarget = ImportTarget(bookID: book.id)
+                } label: {
+                    Label("ファイルから追加（PDF・画像）", systemImage: "folder")
                 }
             }
             Section {
@@ -272,6 +291,12 @@ struct BookDetailView: View {
                     }
                 } label: {
                     Label("全ページの補正を変更", systemImage: "wand.and.stars")
+                }
+                .disabled(book.pages.isEmpty)
+                Button {
+                    splitAll(book: book)
+                } label: {
+                    Label("横長ページをすべて見開き分割", systemImage: "rectangle.split.2x1")
                 }
                 .disabled(book.pages.isEmpty)
                 Button {
@@ -349,6 +374,28 @@ struct BookDetailView: View {
         .background(.bar)
     }
 
+    // MARK: - 見開き分割
+
+    private func split(book: Book, pageID: UUID) {
+        busyMessage = "分割中…"
+        Task {
+            let ok = await store.splitPage(bookID: book.id, pageID: pageID)
+            busyMessage = nil
+            if !ok { errorMessage = "このページは分割できませんでした。" }
+        }
+    }
+
+    private func splitAll(book: Book) {
+        busyMessage = "横長ページを探しています…"
+        Task {
+            let n = await store.splitAllLandscapePages(bookID: book.id) { done, total in
+                busyMessage = "分割中 \(done + 1) / \(total)"
+            }
+            busyMessage = nil
+            if n == 0 { errorMessage = "横長（見開き）のページが見つかりませんでした。" }
+        }
+    }
+
     // MARK: - 書き出し
 
     private enum ExportKind { case pdf, images, text }
@@ -378,6 +425,7 @@ struct PageCell: View {
     let page: Page
     let number: Int
     let isCover: Bool
+    var isBookmarked: Bool = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -397,6 +445,15 @@ struct PageCell: View {
                             .padding(5)
                             .background(Color.accentColor, in: Circle())
                             .padding(4)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if isBookmarked {
+                        Image(systemName: "bookmark.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.red)
+                            .shadow(color: .black.opacity(0.25), radius: 1, y: 1)
+                            .offset(x: 6, y: -3)
                     }
                 }
             Text("\(number)")

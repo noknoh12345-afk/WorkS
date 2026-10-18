@@ -9,6 +9,9 @@ struct SettingsView: View {
     @AppStorage(AppSettings.autoOCRKey) private var autoOCR = true
     @AppStorage(AppSettings.autoCropKey) private var autoCrop = true
     @AppStorage(AppSettings.readerModeKey) private var readerMode = ReaderMode.curl.rawValue
+    @AppStorage(AppSettings.spreadModeKey) private var spreadMode = SpreadMode.auto.rawValue
+    @AppStorage(AppSettings.coverAloneKey) private var coverAlone = true
+    @AppStorage(AppSettings.liveTextKey) private var liveText = true
 
     @State private var dataSize: String = "計算中…"
     @State private var cacheSize: String = "計算中…"
@@ -42,17 +45,28 @@ struct SettingsView: View {
                     Text("認識した文字は本棚の検索と、書き出したPDFの文字検索に使われます。処理はすべて端末内で行われます。")
                 }
 
-                Section("読書") {
+                Section {
                     Picker("ページの切り替え", selection: $readerMode) {
                         ForEach(ReaderMode.allCases) { m in
                             Text(m.label).tag(m.rawValue)
                         }
                     }
+                    Picker("見開き表示", selection: $spreadMode) {
+                        ForEach(SpreadMode.allCases) { m in
+                            Text(m.label).tag(m.rawValue)
+                        }
+                    }
+                    Toggle("見開きで表紙を単独表示", isOn: $coverAlone)
+                    Toggle("ページ上の文字を長押しで選択（テキスト認識表示）", isOn: $liveText)
                     Picker("新しい本の綴じ方向", selection: $defaultBinding) {
                         ForEach(BindingDirection.allCases) { b in
                             Text(b.label).tag(b.rawValue)
                         }
                     }
+                } header: {
+                    Text("読書")
+                } footer: {
+                    Text("見開きで撮影したページは、本の「…」メニューの「横長ページをすべて見開き分割」で1ページずつに分けられます。")
                 }
 
                 Section {

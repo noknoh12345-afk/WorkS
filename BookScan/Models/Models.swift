@@ -118,6 +118,8 @@ struct Book: Codable, Identifiable, Hashable {
     var pages: [Page]
     var coverPageID: UUID?
     var lastReadIndex: Int
+    var bookmarks: [UUID]
+    var lastOpenedAt: Date?
     var createdAt: Date
     var updatedAt: Date
 
@@ -130,12 +132,14 @@ struct Book: Codable, Identifiable, Hashable {
         self.pages = []
         self.coverPageID = nil
         self.lastReadIndex = 0
+        self.bookmarks = []
+        self.lastOpenedAt = nil
         self.createdAt = Date()
         self.updatedAt = Date()
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, author, shelf, binding, pages, coverPageID, lastReadIndex, createdAt, updatedAt
+        case id, title, author, shelf, binding, pages, coverPageID, lastReadIndex, bookmarks, lastOpenedAt, createdAt, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -148,6 +152,8 @@ struct Book: Codable, Identifiable, Hashable {
         pages = (try? c.decode([Page].self, forKey: .pages)) ?? []
         coverPageID = try? c.decode(UUID.self, forKey: .coverPageID)
         lastReadIndex = (try? c.decode(Int.self, forKey: .lastReadIndex)) ?? 0
+        bookmarks = (try? c.decode([UUID].self, forKey: .bookmarks)) ?? []
+        lastOpenedAt = try? c.decode(Date.self, forKey: .lastOpenedAt)
         createdAt = (try? c.decode(Date.self, forKey: .createdAt)) ?? Date()
         updatedAt = (try? c.decode(Date.self, forKey: .updatedAt)) ?? Date()
     }
@@ -158,6 +164,18 @@ struct Book: Codable, Identifiable, Hashable {
     }
 
     var ocrDoneCount: Int { pages.filter { !$0.needsOCR }.count }
+
+    /// 読書の進み具合（0〜1）
+    var progress: Double {
+        guard pages.count > 1 else { return lastReadIndex > 0 ? 1 : 0 }
+        return Double(min(lastReadIndex, pages.count - 1)) / Double(pages.count - 1)
+    }
+
+    var isInProgress: Bool {
+        lastOpenedAt != nil && pages.count > 1 && lastReadIndex > 0 && lastReadIndex < pages.count - 1
+    }
+
+    func isBookmarked(_ pageID: UUID) -> Bool { bookmarks.contains(pageID) }
 }
 
 /// 取り込み先の指定（nil の bookID は新しい本を作る）
@@ -168,10 +186,26 @@ struct ImportTarget: Identifiable, Equatable {
     var replacing: UUID?
 }
 
+/// 見開き表示の設定
+enum SpreadMode: String, CaseIterable, Identifiable {
+    case auto
+    case single
+    case double
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto: return "横向きで見開き"
+        case .single: return "常に1ページ"
+        case .double: return "常に見開き"
+        }
+    }
+}
+
 struct ReadTarget: Identifiable {
     let id = UUID()
     let bookID: UUID
     let index: Int
+    var highlight: String? = nil
 }
 
 struct PageRef: Identifiable {
@@ -217,6 +251,9 @@ enum AppSettings {
     static let autoCropKey = "autoCropPhotos"
     static let readerModeKey = "readerMode"
     static let librarySortKey = "librarySort"
+    static let spreadModeKey = "spreadMode"
+    static let coverAloneKey = "coverAlone"
+    static let liveTextKey = "liveText"
 
     static var defaultFilter: PageFilter {
         PageFilter(rawValue: UserDefaults.standard.string(forKey: defaultFilterKey) ?? "") ?? .enhanced
@@ -237,5 +274,9 @@ enum AppSettings {
 
     static var autoCropPhotos: Bool {
         UserDefaults.standard.object(forKey: autoCropKey) as? Bool ?? true
+    }
+
+    static var liveText: Bool {
+        UserDefaults.standard.object(forKey: liveTextKey) as? Bool ?? true
     }
 }

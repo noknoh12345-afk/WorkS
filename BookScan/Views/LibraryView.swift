@@ -7,6 +7,7 @@ struct LibraryView: View {
     @State private var query = ""
     @State private var scanTarget: ImportTarget?
     @State private var photoTarget: ImportTarget?
+    @State private var fileTarget: ImportTarget?
     @State private var showSettings = false
     @State private var editingBook: Book?
     @State private var deletingBook: Book?
@@ -28,7 +29,7 @@ struct LibraryView: View {
                 } else {
                     SearchResultsView(query: trimmedQuery,
                                       openBook: { path.append($0) },
-                                      openPage: { reading = ReadTarget(bookID: $0, index: $1) })
+                                      openPage: { reading = ReadTarget(bookID: $0, index: $1, highlight: trimmedQuery) })
                 }
             }
             .navigationTitle("本棚")
@@ -59,7 +60,7 @@ struct LibraryView: View {
             if let busyMessage { BusyOverlay(message: busyMessage) }
         }
         .animation(.spring(duration: 0.3), value: store.importProgress)
-        .pageImporter(scanTarget: $scanTarget, photoTarget: $photoTarget) { id, isNew in
+        .pageImporter(scanTarget: $scanTarget, photoTarget: $photoTarget, fileTarget: $fileTarget) { id, isNew in
             if isNew {
                 store.pendingInfoEdit = id
                 path = [id]
@@ -75,7 +76,7 @@ struct LibraryView: View {
             ActivityView(items: item.urls)
         }
         .fullScreenCover(item: $reading) { target in
-            ReaderView(bookID: target.bookID, startIndex: target.index).environment(store)
+            ReaderView(bookID: target.bookID, startIndex: target.index, highlight: target.highlight).environment(store)
         }
         .confirmationDialog("この本を削除しますか？",
                             isPresented: Binding(get: { deletingBook != nil }, set: { if !$0 { deletingBook = nil } }),
@@ -120,8 +121,56 @@ struct LibraryView: View {
         return result.filter { !$0.books.isEmpty }
     }
 
+    private var inProgressBooks: [Book] {
+        store.books
+            .filter { $0.isInProgress }
+            .sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) }
+            .prefix(10)
+            .map { $0 }
+    }
+
+    private var continueReadingRow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("読みかけ").font(.title3.bold()).padding(.horizontal)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(inProgressBooks) { book in
+                        Button {
+                            reading = ReadTarget(bookID: book.id, index: min(book.lastReadIndex, book.pages.count - 1))
+                        } label: {
+                            HStack(spacing: 12) {
+                                BookCoverView(book: book, showsProgress: true)
+                                    .frame(width: 66)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(book.title)
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                    Text("\(book.lastReadIndex + 1) / \(book.pages.count) ページ")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                    Label("続きから", systemImage: "play.fill")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                                .frame(width: 130, alignment: .leading)
+                            }
+                            .padding(10)
+                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
     private var shelvesView: some View {
         LazyVStack(alignment: .leading, spacing: 28) {
+            if !inProgressBooks.isEmpty {
+                continueReadingRow
+            }
             ForEach(groups) { group in
                 VStack(alignment: .leading, spacing: 14) {
                     if !group.name.isEmpty {
@@ -226,6 +275,11 @@ struct LibraryView: View {
                 } label: {
                     Label("写真から取り込み", systemImage: "photo.on.rectangle")
                 }
+                Button {
+                    fileTarget = ImportTarget()
+                } label: {
+                    Label("ファイルから取り込み（PDF・画像）", systemImage: "folder")
+                }
             } label: {
                 Image(systemName: "plus")
             }
@@ -275,7 +329,7 @@ struct BookCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            BookCoverView(book: book)
+            BookCoverView(book: book, showsProgress: true)
             Text(book.title)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(2)

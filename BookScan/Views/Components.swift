@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import VisionKit
 import PhotosUI
+import UniformTypeIdentifiers
 
 // MARK: - サムネイル
 
@@ -35,6 +36,7 @@ struct PageThumbnail: View {
 
 struct BookCoverView: View {
     let book: Book
+    var showsProgress: Bool = false
 
     var body: some View {
         Color(.secondarySystemBackground)
@@ -53,6 +55,18 @@ struct BookCoverView: View {
                                startPoint: book.binding == .right ? .trailing : .leading,
                                endPoint: book.binding == .right ? .leading : .trailing)
                     .frame(width: 12)
+            }
+            .overlay(alignment: .bottom) {
+                if showsProgress && book.lastReadIndex > 0 && book.pages.count > 1 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(.black.opacity(0.35))
+                            Rectangle().fill(Color.accentColor)
+                                .frame(width: geo.size.width * book.progress)
+                        }
+                    }
+                    .frame(height: 4)
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(.black.opacity(0.08)))
@@ -113,10 +127,13 @@ struct PageImporterModifier: ViewModifier {
     @Environment(LibraryStore.self) private var store
     @Binding var scanTarget: ImportTarget?
     @Binding var photoTarget: ImportTarget?
+    @Binding var fileTarget: ImportTarget?
     var onImported: (UUID, Bool) -> Void
 
     @State private var items: [PhotosPickerItem] = []
     @State private var activePhotoTarget: ImportTarget?
+    @State private var fileError: String?
+    @State private var activeFileTarget: ImportTarget?
 
     private var scannerSupported: Bool { VNDocumentCameraViewController.isSupported }
 
@@ -150,6 +167,35 @@ struct PageImporterModifier: ViewModifier {
                 get: { photoTarget != nil },
                 set: { if !$0 { photoTarget = nil } }
             ), selection: $items, maxSelectionCount: nil, selectionBehavior: .ordered, matching: .images)
+            .fileImporter(isPresented: Binding(
+                get: { fileTarget != nil },
+                set: { if !$0 { fileTarget = nil } }
+            ), allowedContentTypes: [.pdf, .image], allowsMultipleSelection: true) { result in
+                let target = activeFileTarget ?? fileTarget ?? ImportTarget()
+                fileTarget = nil
+                switch result {
+                case .success(let urls):
+                    guard !urls.isEmpty else { return }
+                    Task {
+                        if let id = await store.importFiles(urls, target: target) {
+                            onImported(id, target.bookID == nil)
+                        }
+                    }
+                case .failure(let error):
+                    fileError = error.localizedDescription
+                }
+            }
+            .alert("取り込めませんでした", isPresented: Binding(
+                get: { fileError != nil },
+                set: { if !$0 { fileError = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(fileError ?? "")
+            }
+            .onChange(of: fileTarget) { _, newValue in
+                if let newValue { activeFileTarget = newValue }
+            }
             .onChange(of: photoTarget) { _, newValue in
                 if let newValue { activePhotoTarget = newValue }
             }
@@ -175,8 +221,9 @@ struct PageImporterModifier: ViewModifier {
 extension View {
     func pageImporter(scanTarget: Binding<ImportTarget?>,
                       photoTarget: Binding<ImportTarget?>,
+                      fileTarget: Binding<ImportTarget?>,
                       onImported: @escaping (UUID, Bool) -> Void = { _, _ in }) -> some View {
-        modifier(PageImporterModifier(scanTarget: scanTarget, photoTarget: photoTarget, onImported: onImported))
+        modifier(PageImporterModifier(scanTarget: scanTarget, photoTarget: photoTarget, fileTarget: fileTarget, onImported: onImported))
     }
 }
 
