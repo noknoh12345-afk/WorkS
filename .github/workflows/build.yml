@@ -39,7 +39,8 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|warning: .*(deprecated|Sendable)|BUILD" || true
-          test -d build/Build/Products/Release-iphoneos/BookScan.app
+          grep -q "BUILD SUCCEEDED" build.log
+          test -f build/Build/Products/Release-iphoneos/BookScan.app/BookScan
 
       - name: Show errors
         if: failure()

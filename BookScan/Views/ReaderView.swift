@@ -925,7 +925,9 @@ final class PageContentController: UIViewController, UIScrollViewDelegate {
 
     @objc private func handleSingleTap(_ g: UITapGestureRecognizer) {
         if interaction.hasActiveTextSelection {
-            interaction.resetSelection()
+            // 選択を解除（操作タイプを一度外して戻す）
+            interaction.preferredInteractionTypes = []
+            interaction.preferredInteractionTypes = .textSelection
             return
         }
         onSingleTap?(g, scrollView.zoomScale > 1.01)
